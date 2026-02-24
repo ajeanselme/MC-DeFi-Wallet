@@ -1,0 +1,7 @@
+name: DefiWallet
+version: '1.0'
+main: com.eik0.defiwallet.DefiWallet
+api-version: '1.21'
+prefix: DeFi
+load: STARTUP
+authors: [ Eik0_ ]
