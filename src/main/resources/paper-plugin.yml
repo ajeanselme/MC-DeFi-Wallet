@@ -1,7 +1,5 @@
 name: DefiWallet
 version: '1.0'
 main: com.eik0.defiwallet.DefiWallet
-api-version: '1.21'
-prefix: DeFi
-load: STARTUP
-authors: [ Eik0_ ]
+description: A minecraft on-chain wallet POC
+api-version: '1.21.11'
