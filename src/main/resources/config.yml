@@ -1,0 +1,21 @@
+# 11155111 being Sepolia network
+token_chain_id: "11155111"
+
+token_contract_address: ""
+privy_app_id: "privy_app_id"
+privy_app_private: "privy_app_private"
+
+chain_rpc: "https://sepolia.base.org"
+master_key_id: "privy_master_key_id"
+master_key_secret: "privy_master_private_authorization_key"
+
+# New users will be registered with a login email:
+# <mc_uuid>@<user_email_domain>
+user_email_domain: "none.local"
+
+mysql:
+  host: "localhost"
+  port: 3306
+  database: "db"
+  username: "user"
+  password: "pass"
