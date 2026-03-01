@@ -3,7 +3,7 @@ package com.eik0.defiwallet
 import com.eik0.defiwallet.listeners.PlayerListener
 import com.eik0.defiwallet.managers.DatabaseManager
 import com.eik0.defiwallet.managers.TransactionManager
-import com.eik0.defiwallet.managers.WalletManager
+import com.eik0.defiwallet.wallet.WalletManager
 import com.github.shynixn.mccoroutine.bukkit.SuspendingJavaPlugin
 import com.github.shynixn.mccoroutine.bukkit.registerSuspendingEvents
 import dev.jorel.commandapi.CommandAPI

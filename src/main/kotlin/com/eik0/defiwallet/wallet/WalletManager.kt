@@ -1,9 +1,8 @@
-package com.eik0.defiwallet.managers
+package com.eik0.defiwallet.wallet
 
 import com.eik0.defiwallet.DefiWallet
 import com.eik0.defiwallet.extensions.playerName
 import com.eik0.defiwallet.extensions.sendMessage
-import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.github.shynixn.mccoroutine.bukkit.launch
@@ -18,23 +17,21 @@ import io.privy.api.models.errors.APIException
 import io.privy.api.models.operations.UserCreateRequestBody
 import io.privy.api.signing.HttpMethod
 import io.privy.api.signing.WalletApiRequestSignatureInput
-import org.web3j.contracts.eip20.generated.ERC20
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import org.web3j.protocol.Web3j
-import org.web3j.protocol.http.HttpService
-import org.web3j.tx.ReadonlyTransactionManager
-import org.web3j.tx.gas.DefaultGasProvider
 import org.web3j.abi.FunctionEncoder
 import org.web3j.abi.TypeReference
 import org.web3j.abi.datatypes.Address
 import org.web3j.abi.datatypes.Function
 import org.web3j.abi.datatypes.generated.Uint256
-import java.math.BigDecimal
+import org.web3j.contracts.eip20.generated.ERC20
+import org.web3j.protocol.Web3j
+import org.web3j.protocol.http.HttpService
+import org.web3j.tx.ReadonlyTransactionManager
+import org.web3j.tx.gas.DefaultGasProvider
 import java.math.BigInteger
-import java.math.RoundingMode
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -44,102 +41,23 @@ import java.util.UUID
 import kotlin.jvm.optionals.getOrNull
 
 class WalletManager {
-    class UserData(
-        val uuid: UUID,
-        val userId: String,
-        val walletId: String,
-        val walletAddress: String,
-    ) {
-        private val balanceMutex = Mutex()
 
-        var cachedBalanceBase: BigInteger = BigInteger.ZERO
-            private set
-
-        var moneyOnHoldBase: BigInteger = BigInteger.ZERO
-            private set
-
-        init {
-            DefiWallet.instance.launch(Dispatchers.IO) {
-                runCatching {
-                    updateCachedBalance()
-                }.onFailure {
-                    DefiWallet.instance.logger.warning("Failed to update balance for $uuid: ${it.message}")
-                }
-            }
-        }
-
-        suspend fun updateCachedBalance() {
-            val newBalance = withContext(Dispatchers.IO) {
-                val transactionManager =
-                    ReadonlyTransactionManager(DefiWallet.instance.walletManager.web3j, walletAddress)
-
-                val contract = ERC20.load(
-                    DefiWallet.instance.walletManager.tokenContractAddress,
-                    DefiWallet.instance.walletManager.web3j,
-                    transactionManager,
-                    DefaultGasProvider()
-                )
-
-                contract.balanceOf(walletAddress).send()
-            }
-
-            balanceMutex.withLock {
-                cachedBalanceBase = newBalance
-            }
-        }
-
-        suspend fun availableBase(): BigInteger = balanceMutex.withLock {
-            cachedBalanceBase - moneyOnHoldBase
-        }
-
-        suspend fun holdMoneyBase(amountBase: BigInteger) {
-            require(amountBase.signum() >= 0) { "amountBase must be >= 0" }
-            balanceMutex.withLock {
-                moneyOnHoldBase += amountBase
-            }
-        }
-
-        suspend fun restoreMoneyBase(amountBase: BigInteger) {
-            require(amountBase.signum() >= 0) { "amountBase must be >= 0" }
-            balanceMutex.withLock {
-                moneyOnHoldBase = (moneyOnHoldBase - amountBase).coerceAtLeast(BigInteger.ZERO)
-            }
-        }
-
-        suspend fun confirmSpendBase(amountBase: BigInteger) {
-            require(amountBase.signum() >= 0) { "amountBase must be >= 0" }
-            balanceMutex.withLock {
-                moneyOnHoldBase = (moneyOnHoldBase - amountBase).coerceAtLeast(BigInteger.ZERO)
-                cachedBalanceBase = (cachedBalanceBase - amountBase).coerceAtLeast(BigInteger.ZERO)
-            }
-        }
-
-        suspend fun creditBase(amountBase: BigInteger) {
-            require(amountBase.signum() >= 0) { "amountBase must be >= 0" }
-            balanceMutex.withLock {
-                cachedBalanceBase += amountBase
-            }
-        }
-
-        private fun BigInteger.coerceAtLeast(min: BigInteger): BigInteger = if (this < min) min else this
-    }
-    
     val tokenChainId = DefiWallet.instance.config.getInt("token_chain_id").toLong()
     val tokenContractAddress = DefiWallet.instance.config.getString("token_contract_address")
     val privyAppId = DefiWallet.instance.config.getString("privy_app_id")
     val privyAppSecret = DefiWallet.instance.config.getString("privy_app_private")
-    
+
     val masterKeyId = DefiWallet.instance.config.getString("master_key_id")
     val masterKeySecret = DefiWallet.instance.config.getString("master_key_secret")
 
     val userEmailDomain = DefiWallet.instance.config.getString("user_email_domain")
-    
+
     val rpcUrl = DefiWallet.instance.config.getString("chain_rpc")
     val web3j: Web3j = Web3j.build(HttpService(rpcUrl))
 
     private val walletsMutex = Mutex()
     val wallets = mutableMapOf<UUID, UserData>()
-    
+
     val client: PrivyClient = PrivyClient.builder()
         .appId(privyAppId)
         .appSecret(privyAppSecret)
@@ -248,7 +166,8 @@ class WalletManager {
                     .build()
 
                 val httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString())
-                val transactionId = DefiWallet.instance.transactionManager.getTransactionIdFromResponseBody(httpResponse.body())
+                val transactionId =
+                    DefiWallet.instance.transactionManager.getTransactionIdFromResponseBody(httpResponse.body())
 
                 if (transactionId == null) {
                     senderUser.restoreMoneyBase(amountBase)
@@ -256,7 +175,12 @@ class WalletManager {
                     sendError(sender)
                     return@withContext
                 }
-                DefiWallet.instance.transactionManager.addTransaction(sender, recipient, transactionId, amount)
+                DefiWallet.instance.transactionManager.addTransaction(
+                    sender,
+                    recipient,
+                    transactionId,
+                    amount
+                )
 
             } catch (e: APIException) {
                 DefiWallet.instance.logger.severe(e.bodyAsString())
@@ -269,7 +193,7 @@ class WalletManager {
             }
         }
     }
-    
+
     suspend fun getOrCreateUserData(uuid: UUID): UserData? {
         return walletsMutex.withLock {
             wallets[uuid]?.let { return it }
@@ -285,7 +209,7 @@ class WalletManager {
             wallet
         }
     }
-    
+
     private suspend fun createUser(uuid: UUID): UserData? {
         return withContext(Dispatchers.IO) {
             try {
@@ -296,7 +220,7 @@ class WalletManager {
                         listOf(UserWalletAdditionalSigner(masterKeyId!!))
                     )
                     .build()
-                
+
                 val requestBody = UserCreateRequestBody
                     .builder()
                     .wallets(listOf(walletRequest))
@@ -310,18 +234,18 @@ class WalletManager {
                         )
                     )
                     .build()
-                
+
                 DefiWallet.instance.logger.info("Creating new Privy user ($uuid)")
                 val user = client.users().create(requestBody).user()?.getOrNull()
                 if (user == null) {
                     DefiWallet.instance.logger.severe("Failed to create Privy user ($uuid)")
                     return@withContext null
                 }
-                
+
                 val wallet = user.linkedAccounts()
                     .find { it.value() is LinkedAccountEthereumEmbeddedWallet }
                     ?.value() as? LinkedAccountEthereumEmbeddedWallet
-                
+
                 if (wallet == null) {
                     DefiWallet.instance.logger.severe("Failed to retrieve pre generated wallet of ${user.id()} ($uuid)")
                     return@withContext null
@@ -329,9 +253,9 @@ class WalletManager {
                 val userId = user.id()
                 val walletId = wallet.id().get()
                 val walletAddress = wallet.address()
-                
+
                 DefiWallet.instance.databaseManager.saveUser(uuid, userId, walletId, walletAddress)
-                
+
                 return@withContext UserData(
                     uuid = uuid,
                     userId = userId,
@@ -341,7 +265,7 @@ class WalletManager {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-            
+
             return@withContext null
         }
     }

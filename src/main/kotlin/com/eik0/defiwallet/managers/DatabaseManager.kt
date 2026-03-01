@@ -1,6 +1,8 @@
 package com.eik0.defiwallet.managers
 
 import com.eik0.defiwallet.DefiWallet
+import com.eik0.defiwallet.wallet.UserData
+import com.eik0.defiwallet.wallet.WalletManager
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import io.privy.api.models.components.User
@@ -88,7 +90,7 @@ class DatabaseManager {
         }
     }
 
-    suspend fun loadUser(uuid: UUID): WalletManager.UserData? {
+    suspend fun loadUser(uuid: UUID): UserData? {
         return withContext(Dispatchers.IO) {
             try {
                 DefiWallet.instance.logger.info("Loading user data of player $uuid")
@@ -102,7 +104,7 @@ class DatabaseManager {
                         statement.setString(1, uuid.toString())
                         val resultSet = statement.executeQuery()
                         if (resultSet.next()) {
-                            return@withContext WalletManager.UserData(
+                            return@withContext UserData(
                                 uuid = uuid,
                                 userId = resultSet.getString("user_id"),
                                 walletId = resultSet.getString("wallet_id"),
