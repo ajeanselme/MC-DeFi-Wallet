@@ -40,6 +40,9 @@ class TransactionManager {
     suspend fun validatePendingTransactions() {
         val iterator = pendingTransaction.iterator()
         while (iterator.hasNext()) {
+            // Prevent API rate limiting
+            delay(100)
+
             val pendingTransaction = iterator.next()
 
             val transaction =
