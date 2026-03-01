@@ -90,96 +90,158 @@ class WalletManager {
         return amountBase / BigInteger.TEN.pow(decimals)
     }
 
-    suspend fun sendMoney(sender: UUID, recipient: UUID, amount: Long) {
+
+    private fun buildEthSendTransactionBody(caip2: String, contractAddress: String, encodedCallData: String): ObjectNode {
+        return ObjectMapper().createObjectNode().apply {
+            put("method", "eth_sendTransaction")
+            put("caip2", caip2)
+            putObject("params").putObject("transaction").apply {
+                put("to", contractAddress)
+                put("data", encodedCallData)
+            }
+            put("sponsor", true)
+        }
+    }
+
+    private fun sendPrivyContractCallAndGetTransactionId(
+        rpcUrl: String,
+        body: ObjectNode,
+        appId: String,
+        basicAuthHeaderValue: String
+    ): String? {
+        val signature = client
+            .utils()
+            .requestSigner()
+            .generateAuthorizationSignature(
+                DefiWallet.instance.cfg.signing.masterKeySecret,
+                WalletApiRequestSignatureInput(
+                    1,
+                    body,
+                    HttpMethod.POST,
+                    rpcUrl,
+                    null
+                )
+            )
+
+        val httpRequest = HttpRequest
+            .newBuilder(URI(rpcUrl))
+            .header("Authorization", basicAuthHeaderValue)
+            .header("privy-app-id", appId)
+            .header("privy-authorization-signature", signature)
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
+            .build()
+
+        val httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString())
+        return DefiWallet.instance.transactionManager.getTransactionIdFromResponseBody(httpResponse.body())
+    }
+
+    suspend fun sendMoney(sender: UUID?, recipient: UUID, amount: Long) {
         withContext(Dispatchers.IO) {
-            val senderUser = getOrCreateUserData(sender) ?: return@withContext
+            val cfg = DefiWallet.instance.cfg
+
             val recipientUser = getOrCreateUserData(recipient) ?: return@withContext
+            val amountBaseUnits = tokensToBaseUnits(amount)
 
-            val amountBase = tokensToBaseUnits(amount)
+            val caip2 = "eip155:${cfg.wallet.tokenChainId}"
+            val basicAuthHeaderValue = "Basic ${Base64.getEncoder().encodeToString("${cfg.privy.appId}:${cfg.privy.appSecret}".toByteArray(Charsets.UTF_8))}"
 
-            var held = false
+            if (sender == null) {
+                try {
+                    val mintFunction = Function(
+                        "mint",
+                        listOf(Address(recipientUser.walletAddress), Uint256(amountBaseUnits)),
+                        emptyList<TypeReference<*>>()
+                    )
+                    val encodedCallData = FunctionEncoder.encode(mintFunction)
+
+                    val body = buildEthSendTransactionBody(
+                        caip2 = caip2,
+                        contractAddress = cfg.wallet.tokenContractAddress,
+                        encodedCallData = encodedCallData
+                    )
+
+                    val rpcUrl = "https://api.privy.io/v1/wallets/${cfg.wallet.tokenOwnerId}/rpc"
+                    val transactionId = sendPrivyContractCallAndGetTransactionId(
+                        rpcUrl = rpcUrl,
+                        body = body,
+                        appId = cfg.privy.appId,
+                        basicAuthHeaderValue = basicAuthHeaderValue
+                    ) ?: return@withContext
+
+                    DefiWallet.instance.logger.info("Minting $amount$ for player $recipient")
+
+                    DefiWallet.instance.transactionManager.addTransaction(
+                        null,
+                        recipient,
+                        transactionId,
+                        amount
+                    )
+                } catch (e: APIException) {
+                    DefiWallet.instance.logger.severe(e.bodyAsString())
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                return@withContext
+            }
+
+            val senderUser = getOrCreateUserData(sender) ?: return@withContext
+
+            var moneyHeld = false
             try {
-                val available = senderUser.availableBase()
-                if (available < amountBase) {
-                    val displayAvail = baseUnitsToWholeTokensFloor(available)
+                val availableBaseUnits = senderUser.availableBase()
+                if (availableBaseUnits < amountBaseUnits) {
+                    val displayAvail = baseUnitsToWholeTokensFloor(availableBaseUnits)
                     sender.sendMessage("<red><b>(!)</b> You don't have enough money! Available: ${displayAvail}$")
                     return@withContext
                 }
 
-                senderUser.holdMoneyBase(amountBase)
-                held = true
+                senderUser.holdMoneyBase(amountBaseUnits)
+                moneyHeld = true
 
                 sender.sendMessage("<gold><b>(!)</b> Sending $amount$ to ${recipient.playerName()}, please wait...")
 
-                val basicAuth = Base64.getEncoder()
-                    .encodeToString("${DefiWallet.instance.cfg.privy.appId}:${DefiWallet.instance.cfg.privy.appSecret}".toByteArray(Charsets.UTF_8))
-
                 val transferFunction = Function(
                     "transfer",
-                    listOf(Address(recipientUser.walletAddress), Uint256(amountBase)),
+                    listOf(Address(recipientUser.walletAddress), Uint256(amountBaseUnits)),
                     emptyList<TypeReference<*>>()
                 )
-                val encodedFunction = FunctionEncoder.encode(transferFunction)
+                val encodedCallData = FunctionEncoder.encode(transferFunction)
 
-                val body: ObjectNode = ObjectMapper().createObjectNode().apply {
-                    put("method", "eth_sendTransaction")
-                    put("caip2", "eip155:${DefiWallet.instance.cfg.wallet.tokenChainId}")
-                    putObject("params").putObject("transaction").apply {
-                        put("to", DefiWallet.instance.cfg.wallet.tokenContractAddress)
-                        put("data", encodedFunction)
-                    }
-                    put("sponsor", true)
-                }
+                val body = buildEthSendTransactionBody(
+                    caip2 = caip2,
+                    contractAddress = cfg.wallet.tokenContractAddress,
+                    encodedCallData = encodedCallData
+                )
 
-                val url = "https://api.privy.io/v1/wallets/${senderUser.walletId}/rpc"
-
-                val signature = client
-                    .utils()
-                    .requestSigner()
-                    .generateAuthorizationSignature(
-                        DefiWallet.instance.cfg.signing.masterKeySecret,
-                        WalletApiRequestSignatureInput(
-                            1,
-                            body,
-                            HttpMethod.POST,
-                            url,
-                            null
-                        )
-                    )
-
-                val httpRequest = HttpRequest
-                    .newBuilder(URI("https://api.privy.io/v1/wallets/${senderUser.walletId}/rpc"))
-                    .header("Authorization", "Basic $basicAuth")
-                    .header("privy-app-id", DefiWallet.instance.cfg.privy.appId)
-                    .header("privy-authorization-signature", signature)
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
-                    .build()
-
-                val httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString())
-                val transactionId =
-                    DefiWallet.instance.transactionManager.getTransactionIdFromResponseBody(httpResponse.body())
+                val rpcUrl = "https://api.privy.io/v1/wallets/${senderUser.walletId}/rpc"
+                val transactionId = sendPrivyContractCallAndGetTransactionId(
+                    rpcUrl = rpcUrl,
+                    body = body,
+                    appId = cfg.privy.appId,
+                    basicAuthHeaderValue = basicAuthHeaderValue
+                )
 
                 if (transactionId == null) {
-                    senderUser.restoreMoneyBase(amountBase)
-                    held = false
+                    senderUser.restoreMoneyBase(amountBaseUnits)
+                    moneyHeld = false
                     sendError(sender)
                     return@withContext
                 }
+
                 DefiWallet.instance.transactionManager.addTransaction(
                     sender,
                     recipient,
                     transactionId,
                     amount
                 )
-
             } catch (e: APIException) {
                 DefiWallet.instance.logger.severe(e.bodyAsString())
-                if (held) senderUser.restoreMoneyBase(amountBase)
+                if (moneyHeld) senderUser.restoreMoneyBase(amountBaseUnits)
                 sendError(sender)
             } catch (e: Exception) {
                 e.printStackTrace()
-                if (held) senderUser.restoreMoneyBase(amountBase)
+                if (moneyHeld) senderUser.restoreMoneyBase(amountBaseUnits)
                 sendError(sender)
             }
         }
@@ -196,6 +258,10 @@ class WalletManager {
             }
 
             val wallet = createUser(uuid) ?: return null
+            DefiWallet.instance.launch(Dispatchers.IO) {
+                sendMoney(null, uuid, 100)
+            }
+
             wallets[uuid] = wallet
             wallet
         }

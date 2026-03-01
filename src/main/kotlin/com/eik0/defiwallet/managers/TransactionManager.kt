@@ -11,12 +11,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.UUID
 import kotlin.jvm.optionals.getOrNull
 
 class TransactionManager {
     data class PendingTransaction(
-        val sender: UUID,
+        val sender: UUID?,
         val recipient: UUID,
         val transactionId: String,
         val amount: Long,
@@ -37,7 +38,7 @@ class TransactionManager {
         }
     }
     
-    fun addTransaction(sender: UUID, recipient: UUID, transactionId: String, amount: Long) {
+    fun addTransaction(sender: UUID?, recipient: UUID, transactionId: String, amount: Long) {
         DefiWallet.instance.launch(Dispatchers.IO) {
             pendingMutex.withLock {
                 pendingTransaction.add(PendingTransaction(sender, recipient, transactionId, amount))
@@ -46,75 +47,87 @@ class TransactionManager {
     }
     
     suspend fun validatePendingTransactions() {
-        val snapshot = pendingMutex.withLock { pendingTransaction.toList() }
+        withContext(Dispatchers.IO) {
+            val snapshot = pendingMutex.withLock { pendingTransaction.toList() }
 
-        for (pt in snapshot) {
-            // Prevent API rate limiting
-            delay(100)
+            for (pt in snapshot) {
+                // Prevent API rate limiting
+                delay(100)
 
-            val transaction =
-                DefiWallet.instance.walletManager.client.transactions().retrieve(pt.transactionId)
-                    ?.transaction()?.getOrNull()
+                val transaction =
+                    DefiWallet.instance.walletManager.client.transactions().retrieve(pt.transactionId)
+                        ?.transaction()?.getOrNull()
 
-            if (transaction == null) {
-                val amountBase = DefiWallet.instance.walletManager.tokensToBaseUnits(pt.amount)
-                DefiWallet.instance.walletManager.getOrCreateUserData(pt.sender)?.restoreMoneyBase(amountBase)
-                DefiWallet.instance.walletManager.sendError(pt.sender)
-
-                DefiWallet.instance.walletManager.walletRefresher.requestBalanceRefresh(pt.sender)
-
-                DefiWallet.instance.logger.severe(
-                    "Failed to retrieve Privy transaction from transaction id: ${pt.transactionId} (sender=${pt.sender}, recipient=${pt.recipient})"
-                )
-                pendingMutex.withLock { pendingTransaction.removeIf { it.transactionId == pt.transactionId } }
-                continue
-            }
-
-            val newStatus = transaction.status()
-
-            val shouldHandle = pendingMutex.withLock {
-                val current =
-                    pendingTransaction.firstOrNull { it.transactionId == pt.transactionId } ?: return@withLock false
-                if (current.lastStatus == newStatus) return@withLock false
-                current.lastStatus = newStatus
-                true
-            }
-            if (!shouldHandle) continue
-
-            when (newStatus) {
-                StatusEnum.CONFIRMED -> {
+                if (transaction == null) {
                     val amountBase = DefiWallet.instance.walletManager.tokensToBaseUnits(pt.amount)
 
-                    DefiWallet.instance.walletManager.getOrCreateUserData(pt.sender)?.confirmSpendBase(amountBase)
-                    DefiWallet.instance.walletManager.getOrCreateUserData(pt.recipient)?.creditBase(amountBase)
+                    pt.sender?.let {
+                        DefiWallet.instance.walletManager.getOrCreateUserData(it)?.restoreMoneyBase(amountBase)
+                        DefiWallet.instance.walletManager.sendError(it)
+                        DefiWallet.instance.walletManager.walletRefresher.requestBalanceRefresh(it)
+                    }
 
-                    DefiWallet.instance.walletManager.walletRefresher.requestBalanceRefresh(pt.sender, pt.recipient)
-
-                    pt.recipient.sendMessage("<green><b>(!)</b> You received ${pt.amount}$ from ${pt.sender.playerName()}!")
-                    pt.sender.sendMessage("<green><b>(!)</b> You sent ${pt.amount}$ to ${pt.recipient.playerName()}!")
-
-                    pendingMutex.withLock { pendingTransaction.removeIf { it.transactionId == pt.transactionId } }
-                    DefiWallet.instance.logger.info(
-                        "Finalized transaction ${pt.transactionId} (sender=${pt.sender}, recipient=${pt.recipient}, amount=${pt.amount})"
-                    )
-                }
-
-                StatusEnum.EXECUTION_REVERTED, StatusEnum.FAILED, StatusEnum.PROVIDER_ERROR, StatusEnum.REPLACED -> {
-                    val amountBase = DefiWallet.instance.walletManager.tokensToBaseUnits(pt.amount)
-
-                    DefiWallet.instance.walletManager.getOrCreateUserData(pt.sender)?.restoreMoneyBase(amountBase)
-                    DefiWallet.instance.walletManager.sendError(pt.sender)
-
-                    DefiWallet.instance.walletManager.walletRefresher.requestBalanceRefresh(pt.sender)
-
-                    pendingMutex.withLock { pendingTransaction.removeIf { it.transactionId == pt.transactionId } }
                     DefiWallet.instance.logger.severe(
-                        "An error occurred during validation of transaction ${pt.transactionId} (status=$newStatus, sender=${pt.sender}, recipient=${pt.recipient}, amount=${pt.amount})"
+                        "Failed to retrieve Privy transaction from transaction id: ${pt.transactionId} (sender=${pt.sender}, recipient=${pt.recipient})"
                     )
+                    pendingMutex.withLock { pendingTransaction.removeIf { it.transactionId == pt.transactionId } }
+                    continue
                 }
 
-                else -> {
-                    // Optional: emit progress updates}
+                val newStatus = transaction.status()
+
+                val shouldHandle = pendingMutex.withLock {
+                    val current =
+                        pendingTransaction.firstOrNull { it.transactionId == pt.transactionId } ?: return@withLock false
+                    if (current.lastStatus == newStatus) return@withLock false
+                    current.lastStatus = newStatus
+                    true
+                }
+                if (!shouldHandle) continue
+
+                when (newStatus) {
+                    StatusEnum.CONFIRMED -> {
+                        val amountBase = DefiWallet.instance.walletManager.tokensToBaseUnits(pt.amount)
+
+                        pt.sender?.let {
+                            DefiWallet.instance.walletManager.getOrCreateUserData(it)?.confirmSpendBase(amountBase)
+                            DefiWallet.instance.walletManager.walletRefresher.requestBalanceRefresh(pt.sender)
+
+                            pt.sender.sendMessage("<green><b>(!)</b> You sent ${pt.amount}$ to ${pt.recipient.playerName()}!")
+                        }
+
+                        DefiWallet.instance.walletManager.getOrCreateUserData(pt.recipient)?.creditBase(amountBase)
+
+                        DefiWallet.instance.walletManager.walletRefresher.requestBalanceRefresh(pt.recipient)
+
+                        pt.recipient.sendMessage("<green><b>(!)</b> You received ${pt.amount}$ from ${pt.sender?.playerName() ?: "Server"}!")
+
+                        pendingMutex.withLock { pendingTransaction.removeIf { it.transactionId == pt.transactionId } }
+                        DefiWallet.instance.logger.info(
+                            "Finalized transaction ${pt.transactionId} (sender=${pt.sender}, recipient=${pt.recipient}, amount=${pt.amount})"
+                        )
+                    }
+
+                    StatusEnum.EXECUTION_REVERTED, StatusEnum.FAILED, StatusEnum.PROVIDER_ERROR, StatusEnum.REPLACED -> {
+                        val amountBase = DefiWallet.instance.walletManager.tokensToBaseUnits(pt.amount)
+
+                        pt.sender?.let {
+                            DefiWallet.instance.walletManager.getOrCreateUserData(pt.sender)
+                                ?.restoreMoneyBase(amountBase)
+                            DefiWallet.instance.walletManager.sendError(pt.sender)
+
+                            DefiWallet.instance.walletManager.walletRefresher.requestBalanceRefresh(pt.sender)
+                        }
+
+                        pendingMutex.withLock { pendingTransaction.removeIf { it.transactionId == pt.transactionId } }
+                        DefiWallet.instance.logger.severe(
+                            "An error occurred during validation of transaction ${pt.transactionId} (status=$newStatus, sender=${pt.sender}, recipient=${pt.recipient}, amount=${pt.amount})"
+                        )
+                    }
+
+                    else -> {
+                        // Optional: emit progress updates}
+                    }
                 }
             }
         }

@@ -16,6 +16,7 @@ class PluginConfig(private val plugin: JavaPlugin) {
         wallet.tokenChainId
         wallet.tokenContractAddress
         wallet.chainRpc
+        wallet.tokenOwnerId
 
         privy.appId
         privy.appSecret
@@ -43,6 +44,7 @@ class PluginConfig(private val plugin: JavaPlugin) {
     class Wallet(private val plugin: JavaPlugin) {
         val tokenChainId: Long get() = plugin.config.requiredLong("token_chain_id")
         val tokenContractAddress: String get() = plugin.config.requiredString("token_contract_address")
+        val tokenOwnerId: String get() = plugin.config.requiredString("token_owner_id")
         val chainRpc: String get() = plugin.config.requiredString("chain_rpc")
     }
 
