@@ -63,6 +63,8 @@ class WalletManager {
         .appSecret(privyAppSecret)
         .build()
 
+    val walletRefresher = WalletRefresher(this)
+
     private val tokenDecimalsMutex = Mutex()
     private var cachedTokenDecimals: Int? = null
 

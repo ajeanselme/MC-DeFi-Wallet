@@ -60,6 +60,9 @@ class TransactionManager {
                 val amountBase = DefiWallet.instance.walletManager.tokensToBaseUnits(pt.amount)
                 DefiWallet.instance.walletManager.getOrCreateUserData(pt.sender)?.restoreMoneyBase(amountBase)
                 DefiWallet.instance.walletManager.sendError(pt.sender)
+
+                DefiWallet.instance.walletManager.walletRefresher.requestBalanceRefresh(pt.sender)
+
                 DefiWallet.instance.logger.severe(
                     "Failed to retrieve Privy transaction from transaction id: ${pt.transactionId} (sender=${pt.sender}, recipient=${pt.recipient})"
                 )
@@ -85,6 +88,8 @@ class TransactionManager {
                     DefiWallet.instance.walletManager.getOrCreateUserData(pt.sender)?.confirmSpendBase(amountBase)
                     DefiWallet.instance.walletManager.getOrCreateUserData(pt.recipient)?.creditBase(amountBase)
 
+                    DefiWallet.instance.walletManager.walletRefresher.requestBalanceRefresh(pt.sender, pt.recipient)
+
                     pt.recipient.sendMessage("<green><b>(!)</b> You received ${pt.amount}$ from ${pt.sender.playerName()}!")
                     pt.sender.sendMessage("<green><b>(!)</b> You sent ${pt.amount}$ to ${pt.recipient.playerName()}!")
 
@@ -99,6 +104,8 @@ class TransactionManager {
 
                     DefiWallet.instance.walletManager.getOrCreateUserData(pt.sender)?.restoreMoneyBase(amountBase)
                     DefiWallet.instance.walletManager.sendError(pt.sender)
+
+                    DefiWallet.instance.walletManager.walletRefresher.requestBalanceRefresh(pt.sender)
 
                     pendingMutex.withLock { pendingTransaction.removeIf { it.transactionId == pt.transactionId } }
                     DefiWallet.instance.logger.severe(
