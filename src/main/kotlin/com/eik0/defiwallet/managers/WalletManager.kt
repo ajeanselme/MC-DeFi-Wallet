@@ -138,32 +138,14 @@ class WalletManager {
     
     val rpcUrl = DefiWallet.instance.config.getString("chain_rpc")
     val web3j = Web3j.build(HttpService(rpcUrl))
-    
+
+    private val walletsMutex = Mutex()
     val wallets = mutableMapOf<UUID, UserData>()
     
     val client: PrivyClient = PrivyClient.builder()
         .appId(privyAppId)
         .appSecret(privyAppSecret)
         .build()
-    
-    suspend fun getBalance(uuid: UUID): BigInteger {
-        return withContext(Dispatchers.IO) {
-            try {
-                val userData = getOrCreateWallet(uuid) ?: return@withContext BigInteger.ZERO
-                
-                val transactionManager = ReadonlyTransactionManager(web3j, userData.walletAddress)
-                val contract = ERC20.load(tokenContractAddress, web3j, transactionManager, DefaultGasProvider())
-                
-                val balance = contract.balanceOf(userData.walletAddress).send()
-                val decimals = contract.decimals().send()
-                
-                val balanceDouble = balance / BigInteger.TEN.pow(decimals.toInt())
-                
-                return@withContext balanceDouble
-                
-            } catch (e: Exception) {
-                DefiWallet.instance.logger.severe("Failed to retrieve wallet balance for $uuid: ${e.message}")
-                e.printStackTrace()
 
     private val tokenDecimalsMutex = Mutex()
     private var cachedTokenDecimals: Int? = null
@@ -294,20 +276,19 @@ class WalletManager {
         }
     }
     
-    suspend fun getOrCreateWallet(uuid: UUID): UserData? {
-        return withContext(Dispatchers.IO) {
-            wallets[uuid]?.let { return@withContext it }
-            
+    suspend fun getOrCreateUserData(uuid: UUID): UserData? {
+        return walletsMutex.withLock {
+            wallets[uuid]?.let { return it }
+
             val existingUser = DefiWallet.instance.databaseManager.loadUser(uuid)
             if (existingUser != null) {
                 wallets[uuid] = existingUser
-                return@withContext existingUser
+                return existingUser
             }
-            
-            val wallet = createUser(uuid) ?: return@withContext null
-            
+
+            val wallet = createUser(uuid) ?: return null
             wallets[uuid] = wallet
-            return@withContext wallet
+            wallet
         }
     }
     
