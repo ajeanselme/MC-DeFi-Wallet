@@ -2,6 +2,7 @@ package com.eik0.defiwallet
 
 import com.eik0.defiwallet.listeners.PlayerListener
 import com.eik0.defiwallet.managers.DatabaseManager
+import com.eik0.defiwallet.managers.TransactionManager
 import com.eik0.defiwallet.managers.WalletManager
 import com.github.shynixn.mccoroutine.bukkit.SuspendingJavaPlugin
 import com.github.shynixn.mccoroutine.bukkit.registerSuspendingEvents
@@ -19,6 +20,7 @@ class DefiWallet : SuspendingJavaPlugin() {
 
     val databaseManager by lazy { DatabaseManager() }
     val walletManager by lazy { WalletManager() }
+    val transactionManager by lazy { TransactionManager() }
 
     override suspend fun onLoadAsync() {
         super.onLoadAsync()
@@ -40,6 +42,7 @@ class DefiWallet : SuspendingJavaPlugin() {
 
         Security.addProvider(BouncyCastleProvider())
         databaseManager.load()
+        transactionManager.load()
     }
 
     override suspend fun onDisableAsync() {

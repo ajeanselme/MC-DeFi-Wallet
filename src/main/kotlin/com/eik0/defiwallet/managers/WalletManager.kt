@@ -1,12 +1,15 @@
 package com.eik0.defiwallet.managers
 
 import com.eik0.defiwallet.DefiWallet
+import com.eik0.defiwallet.extensions.sendMessage
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.github.shynixn.mccoroutine.bukkit.launch
 import io.privy.api.PrivyClient
 import io.privy.api.models.components.LinkedAccountEmailInput
 import io.privy.api.models.components.LinkedAccountEmailInputType
 import io.privy.api.models.components.LinkedAccountEthereumEmbeddedWallet
+import io.privy.api.models.components.StatusEnum
 import io.privy.api.models.components.UserWalletAdditionalSigner
 import io.privy.api.models.components.UserWalletRequest
 import io.privy.api.models.components.WalletChainType
@@ -14,9 +17,13 @@ import io.privy.api.models.errors.APIException
 import io.privy.api.models.operations.UserCreateRequestBody
 import io.privy.api.signing.HttpMethod
 import io.privy.api.signing.WalletApiRequestSignatureInput
+import io.privy.api.utils.JSON
 import org.web3j.contracts.eip20.generated.ERC20
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import net.kyori.adventure.text.minimessage.MiniMessage
+import org.bukkit.Bukkit
 import org.web3j.protocol.Web3j
 import org.web3j.protocol.http.HttpService
 import org.web3j.tx.ReadonlyTransactionManager
@@ -90,8 +97,10 @@ class WalletManager {
     suspend fun sendMoney(sender: UUID, recipient: UUID, amount: Long) {
         withContext(Dispatchers.IO) {
             try {
-                val senderUser = getOrCreateWallet(sender) ?: return@withContext null
-                val recipientUser = getOrCreateWallet(recipient) ?: return@withContext null
+                sender.sendMessage("<gold><b>(!)</b> Transferring $amount$, please wait...")
+
+                val senderUser = getOrCreateWallet(sender) ?: return@withContext
+                val recipientUser = getOrCreateWallet(recipient) ?: return@withContext
                 
                 val basicAuth = Base64.getEncoder().encodeToString("$privyAppId:$privyAppSecret".toByteArray(Charsets.UTF_8))
 
@@ -143,8 +152,12 @@ class WalletManager {
                     .build()
 
                 val httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString())
-                println(httpResponse.body())
-
+                val transactionId = DefiWallet.instance.transactionManager.getTransactionIdFromResponseBody(httpResponse.body())
+                if(transactionId == null) {
+                    sendError(sender)
+                    return@withContext
+                }
+                DefiWallet.instance.transactionManager.addTransaction(sender, recipient, transactionId, amount)
 
             } catch (e: APIException) {
                 val errorBody = e.bodyAsString()
@@ -230,5 +243,9 @@ class WalletManager {
             
             return@withContext null
         }
+    }
+
+    fun sendError(uuid: UUID) {
+        uuid.sendMessage("<red><b>(!)</b> An error happened during transfer of your funds. Don't worry, your balance hasn't changed.")
     }
 }
