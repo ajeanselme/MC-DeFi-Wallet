@@ -1,15 +1,16 @@
 package com.eik0.defiwallet.managers
 
 import com.eik0.defiwallet.DefiWallet
+import com.eik0.defiwallet.extensions.playerName
 import com.eik0.defiwallet.extensions.sendMessage
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ObjectNode
 import com.github.shynixn.mccoroutine.bukkit.launch
 import io.privy.api.PrivyClient
 import io.privy.api.models.components.LinkedAccountEmailInput
 import io.privy.api.models.components.LinkedAccountEmailInputType
 import io.privy.api.models.components.LinkedAccountEthereumEmbeddedWallet
-import io.privy.api.models.components.StatusEnum
 import io.privy.api.models.components.UserWalletAdditionalSigner
 import io.privy.api.models.components.UserWalletRequest
 import io.privy.api.models.components.WalletChainType
@@ -17,14 +18,11 @@ import io.privy.api.models.errors.APIException
 import io.privy.api.models.operations.UserCreateRequestBody
 import io.privy.api.signing.HttpMethod
 import io.privy.api.signing.WalletApiRequestSignatureInput
-import io.privy.api.utils.JSON
 import org.web3j.contracts.eip20.generated.ERC20
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import net.kyori.adventure.text.minimessage.MiniMessage
-import org.bukkit.Bukkit
 import org.web3j.protocol.Web3j
 import org.web3j.protocol.http.HttpService
 import org.web3j.tx.ReadonlyTransactionManager
@@ -137,7 +135,7 @@ class WalletManager {
     val userEmailDomain = DefiWallet.instance.config.getString("user_email_domain")
     
     val rpcUrl = DefiWallet.instance.config.getString("chain_rpc")
-    val web3j = Web3j.build(HttpService(rpcUrl))
+    val web3j: Web3j = Web3j.build(HttpService(rpcUrl))
 
     private val walletsMutex = Mutex()
     val wallets = mutableMapOf<UUID, UserData>()
@@ -214,19 +212,15 @@ class WalletManager {
                 )
                 val encodedFunction = FunctionEncoder.encode(transferFunction)
 
-                val bodyString = """
-                        {
-                            "method": "eth_sendTransaction",
-                            "caip2": "eip155:$tokenChainId",
-                            "params": {
-                                "transaction": {
-                                    "to": "$tokenContractAddress",
-                                    "data": "$encodedFunction"
-                                }
-                            },
-                            "sponsor": true
-                        }
-                    """.trimIndent()
+                val body: ObjectNode = ObjectMapper().createObjectNode().apply {
+                    put("method", "eth_sendTransaction")
+                    put("caip2", "eip155:$tokenChainId")
+                    putObject("params").putObject("transaction").apply {
+                        put("to", tokenContractAddress)
+                        put("data", encodedFunction)
+                    }
+                    put("sponsor", true)
+                }
 
                 val url = "https://api.privy.io/v1/wallets/${senderUser.walletId}/rpc"
 
