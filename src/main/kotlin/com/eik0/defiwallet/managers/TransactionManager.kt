@@ -9,6 +9,8 @@ import io.privy.api.utils.JSON
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 import kotlin.jvm.optionals.getOrNull
 
@@ -22,7 +24,9 @@ class TransactionManager {
     )
     
     var transactionJob: Job? = null
-    val pendingTransaction = mutableListOf<PendingTransaction>()
+
+    private val pendingMutex = Mutex()
+    private val pendingTransaction = mutableListOf<PendingTransaction>()
     
     fun load() {
         transactionJob = DefiWallet.instance.launch(Dispatchers.IO) { 
@@ -34,19 +38,22 @@ class TransactionManager {
     }
     
     fun addTransaction(sender: UUID, recipient: UUID, transactionId: String, amount: Long) {
-        pendingTransaction.add(PendingTransaction(sender, recipient, transactionId, amount))
+        DefiWallet.instance.launch(Dispatchers.IO) {
+            pendingMutex.withLock {
+                pendingTransaction.add(PendingTransaction(sender, recipient, transactionId, amount))
+            }
+        }
     }
     
     suspend fun validatePendingTransactions() {
-        val iterator = pendingTransaction.iterator()
-        while (iterator.hasNext()) {
+        val snapshot = pendingMutex.withLock { pendingTransaction.toList() }
+
+        for (pt in snapshot) {
             // Prevent API rate limiting
             delay(100)
 
-            val pendingTransaction = iterator.next()
-
             val transaction =
-                DefiWallet.instance.walletManager.client.transactions().retrieve(pendingTransaction.transactionId)
+                DefiWallet.instance.walletManager.client.transactions().retrieve(pt.transactionId)
                     ?.transaction()?.getOrNull()
 
             if (transaction == null) {
@@ -62,13 +69,16 @@ class TransactionManager {
 
             val newStatus = transaction.status()
 
-            if(pendingTransaction.lastStatus == newStatus) {
-                continue
+            val shouldHandle = pendingMutex.withLock {
+                val current =
+                    pendingTransaction.firstOrNull { it.transactionId == pt.transactionId } ?: return@withLock false
+                if (current.lastStatus == newStatus) return@withLock false
+                current.lastStatus = newStatus
+                true
             }
+            if (!shouldHandle) continue
 
-            pendingTransaction.lastStatus = newStatus
-
-            when(newStatus) {
+            when (newStatus) {
                 StatusEnum.CONFIRMED -> {
                     val amountBase = DefiWallet.instance.walletManager.tokensToBaseUnits(pt.amount)
 
@@ -95,12 +105,14 @@ class TransactionManager {
                         "An error occurred during validation of transaction ${pt.transactionId} (status=$newStatus, sender=${pt.sender}, recipient=${pt.recipient}, amount=${pt.amount})"
                     )
                 }
-                // Possibility to add status updates to keep user informed of the progress
-                else -> {}
+
+                else -> {
+                    // Optional: emit progress updates}
+                }
             }
         }
     }
-    
+
     fun getTransactionIdFromResponseBody(response: String): String? {
         try {
             val jsonResponse = JSON.getMapper().readTree(response)
