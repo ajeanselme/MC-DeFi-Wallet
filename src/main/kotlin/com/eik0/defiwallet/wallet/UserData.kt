@@ -43,7 +43,7 @@ class UserData(
                 ReadonlyTransactionManager(DefiWallet.instance.walletManager.web3j, walletAddress)
 
             val contract = ERC20.load(
-                DefiWallet.instance.walletManager.tokenContractAddress,
+                DefiWallet.instance.cfg.wallet.tokenContractAddress,
                 DefiWallet.instance.walletManager.web3j,
                 transactionManager,
                 DefaultGasProvider()

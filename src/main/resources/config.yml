@@ -3,7 +3,7 @@ token_chain_id: "11155111"
 
 token_contract_address: ""
 privy_app_id: "privy_app_id"
-privy_app_private: "privy_app_private"
+privy_app_secret: "privy_app_secret"
 
 chain_rpc: "https://sepolia.base.org"
 master_key_id: "privy_master_key_id"

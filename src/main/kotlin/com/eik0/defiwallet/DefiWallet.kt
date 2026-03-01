@@ -1,5 +1,6 @@
 package com.eik0.defiwallet
 
+import com.eik0.defiwallet.config.PluginConfig
 import com.eik0.defiwallet.listeners.PlayerListener
 import com.eik0.defiwallet.managers.DatabaseManager
 import com.eik0.defiwallet.managers.TransactionManager
@@ -18,6 +19,7 @@ class DefiWallet : SuspendingJavaPlugin() {
         lateinit var instance: DefiWallet
     }
 
+    val cfg by lazy { PluginConfig(this) }
     val databaseManager by lazy { DatabaseManager() }
     val walletManager by lazy { WalletManager() }
     val transactionManager by lazy { TransactionManager() }
@@ -32,7 +34,9 @@ class DefiWallet : SuspendingJavaPlugin() {
     override suspend fun onEnableAsync() {
         super.onEnableAsync()
         instance = this
+
         saveDefaultConfig()
+        cfg.reloadAndValidate()
 
         CommandAPI.onEnable()
 

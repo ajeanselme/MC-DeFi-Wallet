@@ -42,25 +42,14 @@ import kotlin.jvm.optionals.getOrNull
 
 class WalletManager {
 
-    val tokenChainId = DefiWallet.instance.config.getInt("token_chain_id").toLong()
-    val tokenContractAddress = DefiWallet.instance.config.getString("token_contract_address")
-    val privyAppId = DefiWallet.instance.config.getString("privy_app_id")
-    val privyAppSecret = DefiWallet.instance.config.getString("privy_app_private")
-
-    val masterKeyId = DefiWallet.instance.config.getString("master_key_id")
-    val masterKeySecret = DefiWallet.instance.config.getString("master_key_secret")
-
-    val userEmailDomain = DefiWallet.instance.config.getString("user_email_domain")
-
-    val rpcUrl = DefiWallet.instance.config.getString("chain_rpc")
-    val web3j: Web3j = Web3j.build(HttpService(rpcUrl))
+    val web3j: Web3j = Web3j.build(HttpService(DefiWallet.instance.cfg.wallet.chainRpc))
 
     private val walletsMutex = Mutex()
     val wallets = mutableMapOf<UUID, UserData>()
 
     val client: PrivyClient = PrivyClient.builder()
-        .appId(privyAppId)
-        .appSecret(privyAppSecret)
+        .appId(DefiWallet.instance.cfg.privy.appId)
+        .appSecret(DefiWallet.instance.cfg.privy.appSecret)
         .build()
 
     val walletRefresher = WalletRefresher(this)
@@ -75,9 +64,9 @@ class WalletManager {
 
             val decimals = withContext(Dispatchers.IO) {
                 val transactionManager =
-                    ReadonlyTransactionManager(web3j, tokenContractAddress)
+                    ReadonlyTransactionManager(web3j, DefiWallet.instance.cfg.wallet.tokenContractAddress)
                 val contract = ERC20.load(
-                    tokenContractAddress,
+                    DefiWallet.instance.cfg.wallet.tokenContractAddress,
                     web3j,
                     transactionManager,
                     DefaultGasProvider()
@@ -123,7 +112,7 @@ class WalletManager {
                 sender.sendMessage("<gold><b>(!)</b> Sending $amount$ to ${recipient.playerName()}, please wait...")
 
                 val basicAuth = Base64.getEncoder()
-                    .encodeToString("$privyAppId:$privyAppSecret".toByteArray(Charsets.UTF_8))
+                    .encodeToString("${DefiWallet.instance.cfg.privy.appId}:${DefiWallet.instance.cfg.privy.appSecret}".toByteArray(Charsets.UTF_8))
 
                 val transferFunction = Function(
                     "transfer",
@@ -134,9 +123,9 @@ class WalletManager {
 
                 val body: ObjectNode = ObjectMapper().createObjectNode().apply {
                     put("method", "eth_sendTransaction")
-                    put("caip2", "eip155:$tokenChainId")
+                    put("caip2", "eip155:${DefiWallet.instance.cfg.wallet.tokenChainId}")
                     putObject("params").putObject("transaction").apply {
-                        put("to", tokenContractAddress)
+                        put("to", DefiWallet.instance.cfg.wallet.tokenContractAddress)
                         put("data", encodedFunction)
                     }
                     put("sponsor", true)
@@ -148,7 +137,7 @@ class WalletManager {
                     .utils()
                     .requestSigner()
                     .generateAuthorizationSignature(
-                        masterKeySecret,
+                        DefiWallet.instance.cfg.signing.masterKeySecret,
                         WalletApiRequestSignatureInput(
                             1,
                             body,
@@ -161,7 +150,7 @@ class WalletManager {
                 val httpRequest = HttpRequest
                     .newBuilder(URI("https://api.privy.io/v1/wallets/${senderUser.walletId}/rpc"))
                     .header("Authorization", "Basic $basicAuth")
-                    .header("privy-app-id", privyAppId)
+                    .header("privy-app-id", DefiWallet.instance.cfg.privy.appId)
                     .header("privy-authorization-signature", signature)
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
@@ -219,7 +208,7 @@ class WalletManager {
                     .builder()
                     .chainType(WalletChainType.ETHEREUM)
                     .additionalSigners(
-                        listOf(UserWalletAdditionalSigner(masterKeyId!!))
+                        listOf(UserWalletAdditionalSigner(DefiWallet.instance.cfg.signing.masterKeyId))
                     )
                     .build()
 
@@ -231,7 +220,7 @@ class WalletManager {
                             LinkedAccountEmailInput
                                 .builder()
                                 .type(LinkedAccountEmailInputType.EMAIL)
-                                .address("$uuid@$userEmailDomain")
+                                .address("$uuid@${DefiWallet.instance.cfg.users.emailDomain}")
                                 .build()
                         )
                     )
