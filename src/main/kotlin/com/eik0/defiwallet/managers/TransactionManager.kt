@@ -1,6 +1,7 @@
 package com.eik0.defiwallet.managers
 
 import com.eik0.defiwallet.DefiWallet
+import com.eik0.defiwallet.extensions.playerName
 import com.eik0.defiwallet.extensions.sendMessage
 import com.github.shynixn.mccoroutine.bukkit.launch
 import io.privy.api.models.components.StatusEnum
@@ -36,7 +37,7 @@ class TransactionManager {
         pendingTransaction.add(PendingTransaction(sender, recipient, transactionId, amount))
     }
     
-    fun validatePendingTransactions() {
+    suspend fun validatePendingTransactions() {
         val iterator = pendingTransaction.iterator()
         while (iterator.hasNext()) {
             val pendingTransaction = iterator.next()
@@ -62,7 +63,7 @@ class TransactionManager {
 
             when(newStatus) {
                 StatusEnum.CONFIRMED -> {
-                    pendingTransaction.sender.sendMessage("<green><b>(!)</b> Vous avez envoyé ${pendingTransaction.amount}$ à ${pendingTransaction.recipient} !")
+                    pendingTransaction.sender.sendMessage("<green><b>(!)</b> You sent ${pendingTransaction.amount}$ to ${pendingTransaction.recipient.playerName()} !")
                     iterator.remove()
                     DefiWallet.instance.logger.info("Finalized transaction ${pendingTransaction.transactionId} (sender=${pendingTransaction.sender}, recipient=${pendingTransaction.recipient}, amount=${pendingTransaction.amount})")
                     continue
