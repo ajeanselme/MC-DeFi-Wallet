@@ -8,6 +8,6 @@ import org.bukkit.event.player.PlayerJoinEvent
 class PlayerListener: Listener {
     @EventHandler
     suspend fun onJoin(event: PlayerJoinEvent) {
-        DefiWallet.instance.walletManager.getOrCreateWallet(event.player.uniqueId)
+        DefiWallet.instance.walletManager.getOrCreateUserData(event.player.uniqueId)
     }
 }

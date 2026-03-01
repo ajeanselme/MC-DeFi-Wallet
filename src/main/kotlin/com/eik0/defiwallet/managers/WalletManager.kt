@@ -20,7 +20,8 @@ import io.privy.api.signing.WalletApiRequestSignatureInput
 import io.privy.api.utils.JSON
 import org.web3j.contracts.eip20.generated.ERC20
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import net.kyori.adventure.text.minimessage.MiniMessage
 import org.bukkit.Bukkit
@@ -33,7 +34,9 @@ import org.web3j.abi.TypeReference
 import org.web3j.abi.datatypes.Address
 import org.web3j.abi.datatypes.Function
 import org.web3j.abi.datatypes.generated.Uint256
+import java.math.BigDecimal
 import java.math.BigInteger
+import java.math.RoundingMode
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -48,7 +51,80 @@ class WalletManager {
         val userId: String,
         val walletId: String,
         val walletAddress: String,
-    )
+    ) {
+        private val balanceMutex = Mutex()
+
+        var cachedBalanceBase: BigInteger = BigInteger.ZERO
+            private set
+
+        var moneyOnHoldBase: BigInteger = BigInteger.ZERO
+            private set
+
+        init {
+            DefiWallet.instance.launch(Dispatchers.IO) {
+                runCatching {
+                    updateCachedBalance()
+                }.onFailure {
+                    DefiWallet.instance.logger.warning("Failed to update balance for $uuid: ${it.message}")
+                }
+            }
+        }
+
+        suspend fun updateCachedBalance() {
+            val newBalance = withContext(Dispatchers.IO) {
+                val transactionManager =
+                    ReadonlyTransactionManager(DefiWallet.instance.walletManager.web3j, walletAddress)
+
+                val contract = ERC20.load(
+                    DefiWallet.instance.walletManager.tokenContractAddress,
+                    DefiWallet.instance.walletManager.web3j,
+                    transactionManager,
+                    DefaultGasProvider()
+                )
+
+                contract.balanceOf(walletAddress).send()
+            }
+
+            balanceMutex.withLock {
+                cachedBalanceBase = newBalance
+            }
+        }
+
+        suspend fun availableBase(): BigInteger = balanceMutex.withLock {
+            cachedBalanceBase - moneyOnHoldBase
+        }
+
+        suspend fun holdMoneyBase(amountBase: BigInteger) {
+            require(amountBase.signum() >= 0) { "amountBase must be >= 0" }
+            balanceMutex.withLock {
+                moneyOnHoldBase += amountBase
+            }
+        }
+
+        suspend fun restoreMoneyBase(amountBase: BigInteger) {
+            require(amountBase.signum() >= 0) { "amountBase must be >= 0" }
+            balanceMutex.withLock {
+                moneyOnHoldBase = (moneyOnHoldBase - amountBase).coerceAtLeast(BigInteger.ZERO)
+            }
+        }
+
+        suspend fun confirmSpendBase(amountBase: BigInteger) {
+            require(amountBase.signum() >= 0) { "amountBase must be >= 0" }
+            balanceMutex.withLock {
+                moneyOnHoldBase = (moneyOnHoldBase - amountBase).coerceAtLeast(BigInteger.ZERO)
+                cachedBalanceBase = (cachedBalanceBase - amountBase).coerceAtLeast(BigInteger.ZERO)
+            }
+        }
+
+        suspend fun creditBase(amountBase: BigInteger) {
+            require(amountBase.signum() >= 0) { "amountBase must be >= 0" }
+            balanceMutex.withLock {
+                cachedBalanceBase += amountBase
+            }
+        }
+
+        private fun BigInteger.coerceAtLeast(min: BigInteger): BigInteger = if (this < min) min else this
+    }
     
     val tokenChainId = DefiWallet.instance.config.getInt("token_chain_id").toLong()
     val tokenContractAddress = DefiWallet.instance.config.getString("token_contract_address")
@@ -88,25 +164,70 @@ class WalletManager {
             } catch (e: Exception) {
                 DefiWallet.instance.logger.severe("Failed to retrieve wallet balance for $uuid: ${e.message}")
                 e.printStackTrace()
+
+    private val tokenDecimalsMutex = Mutex()
+    private var cachedTokenDecimals: Int? = null
+
+    private suspend fun getTokenDecimals(): Int {
+        cachedTokenDecimals?.let { return it }
+        return tokenDecimalsMutex.withLock {
+            cachedTokenDecimals?.let { return@withLock it }
+
+            val decimals = withContext(Dispatchers.IO) {
+                val transactionManager =
+                    ReadonlyTransactionManager(web3j, tokenContractAddress)
+                val contract = ERC20.load(
+                    tokenContractAddress,
+                    web3j,
+                    transactionManager,
+                    DefaultGasProvider()
+                )
+                contract.decimals().send().toInt()
             }
-            
-            return@withContext BigInteger.ZERO
+
+            cachedTokenDecimals = decimals
+            decimals
         }
     }
-    
+
+    suspend fun tokensToBaseUnits(amountTokens: Long): BigInteger {
+        require(amountTokens >= 0) { "amountTokens must be >= 0" }
+        val decimals = getTokenDecimals()
+        return BigInteger.valueOf(amountTokens) * BigInteger.TEN.pow(decimals)
+    }
+
+    suspend fun baseUnitsToWholeTokensFloor(amountBase: BigInteger): BigInteger {
+        val decimals = getTokenDecimals()
+        return amountBase / BigInteger.TEN.pow(decimals)
+    }
+
     suspend fun sendMoney(sender: UUID, recipient: UUID, amount: Long) {
         withContext(Dispatchers.IO) {
-            try {
-                sender.sendMessage("<gold><b>(!)</b> Transferring $amount$, please wait...")
+            val senderUser = getOrCreateUserData(sender) ?: return@withContext
+            val recipientUser = getOrCreateUserData(recipient) ?: return@withContext
 
-                val senderUser = getOrCreateWallet(sender) ?: return@withContext
-                val recipientUser = getOrCreateWallet(recipient) ?: return@withContext
-                
-                val basicAuth = Base64.getEncoder().encodeToString("$privyAppId:$privyAppSecret".toByteArray(Charsets.UTF_8))
+            val amountBase = tokensToBaseUnits(amount)
+
+            var held = false
+            try {
+                val available = senderUser.availableBase()
+                if (available < amountBase) {
+                    val displayAvail = baseUnitsToWholeTokensFloor(available)
+                    sender.sendMessage("<red><b>(!)</b> You don't have enough money! Available: ${displayAvail}$")
+                    return@withContext
+                }
+
+                senderUser.holdMoneyBase(amountBase)
+                held = true
+
+                sender.sendMessage("<gold><b>(!)</b> Sending $amount$ to ${recipient.playerName()}, please wait...")
+
+                val basicAuth = Base64.getEncoder()
+                    .encodeToString("$privyAppId:$privyAppSecret".toByteArray(Charsets.UTF_8))
 
                 val transferFunction = Function(
                     "transfer",
-                    listOf(Address(recipientUser.walletAddress), Uint256(BigInteger.valueOf(amount) * BigInteger.TEN.pow(18))),
+                    listOf(Address(recipientUser.walletAddress), Uint256(amountBase)),
                     emptyList<TypeReference<*>>()
                 )
                 val encodedFunction = FunctionEncoder.encode(transferFunction)
@@ -125,8 +246,7 @@ class WalletManager {
                         }
                     """.trimIndent()
 
-                val objectMapper = ObjectMapper()
-                val body: JsonNode = objectMapper.readTree(bodyString)
+                val url = "https://api.privy.io/v1/wallets/${senderUser.walletId}/rpc"
 
                 val signature = client
                     .utils()
@@ -137,7 +257,7 @@ class WalletManager {
                             1,
                             body,
                             HttpMethod.POST,
-                            "https://api.privy.io/v1/wallets/${senderUser.walletId}/rpc",
+                            url,
                             null
                         )
                     )
@@ -153,17 +273,23 @@ class WalletManager {
 
                 val httpResponse = HttpClient.newHttpClient().send(httpRequest, HttpResponse.BodyHandlers.ofString())
                 val transactionId = DefiWallet.instance.transactionManager.getTransactionIdFromResponseBody(httpResponse.body())
-                if(transactionId == null) {
+
+                if (transactionId == null) {
+                    senderUser.restoreMoneyBase(amountBase)
+                    held = false
                     sendError(sender)
                     return@withContext
                 }
                 DefiWallet.instance.transactionManager.addTransaction(sender, recipient, transactionId, amount)
 
             } catch (e: APIException) {
-                val errorBody = e.bodyAsString()
-                DefiWallet.instance.logger.severe(errorBody)
+                DefiWallet.instance.logger.severe(e.bodyAsString())
+                if (held) senderUser.restoreMoneyBase(amountBase)
+                sendError(sender)
             } catch (e: Exception) {
                 e.printStackTrace()
+                if (held) senderUser.restoreMoneyBase(amountBase)
+                sendError(sender)
             }
         }
     }

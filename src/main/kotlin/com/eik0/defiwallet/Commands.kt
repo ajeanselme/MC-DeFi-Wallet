@@ -8,16 +8,17 @@ import dev.jorel.commandapi.kotlindsl.playerExecutor
 import kotlinx.coroutines.Dispatchers
 import net.kyori.adventure.text.minimessage.MiniMessage
 import org.bukkit.entity.Player
+import java.math.BigInteger
 
 class Commands {
     init {
         commandAPICommand("balance") {
             playerExecutor { player, _ ->
                 DefiWallet.instance.launch(Dispatchers.IO) {
-                    val balance = DefiWallet.instance.walletManager.getBalance(player.uniqueId)
+                    val balance = DefiWallet.instance.walletManager.getOrCreateUserData(player.uniqueId)?.availableBase() ?: BigInteger.ZERO
                     player.sendMessage(
                         MiniMessage.miniMessage().deserialize(
-                            "<gold><b>(!)</b> Your balance is $balance"
+                            "<gold><b>(!)</b> Your balance is ${DefiWallet.instance.walletManager.baseUnitsToWholeTokensFloor(balance)}$"
                         )
                     )
                 }

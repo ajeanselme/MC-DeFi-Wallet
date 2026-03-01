@@ -53,6 +53,12 @@ class TransactionManager {
                 DefiWallet.instance.walletManager.sendError(pendingTransaction.sender)
                 DefiWallet.instance.logger.severe("Failed to retrieve Privy transaction from transaction id: ${pendingTransaction.transactionId} (sender=${pendingTransaction.sender}, recipient=${pendingTransaction.recipient})")
                 iterator.remove()
+                val amountBase = DefiWallet.instance.walletManager.tokensToBaseUnits(pt.amount)
+                DefiWallet.instance.walletManager.getOrCreateUserData(pt.sender)?.restoreMoneyBase(amountBase)
+                DefiWallet.instance.walletManager.sendError(pt.sender)
+                DefiWallet.instance.logger.severe(
+                    "Failed to retrieve Privy transaction from transaction id: ${pt.transactionId} (sender=${pt.sender}, recipient=${pt.recipient})"
+                )
                 continue
             }
 
@@ -70,6 +76,17 @@ class TransactionManager {
                     iterator.remove()
                     DefiWallet.instance.logger.info("Finalized transaction ${pendingTransaction.transactionId} (sender=${pendingTransaction.sender}, recipient=${pendingTransaction.recipient}, amount=${pendingTransaction.amount})")
                     continue
+                    val amountBase = DefiWallet.instance.walletManager.tokensToBaseUnits(pt.amount)
+
+                    DefiWallet.instance.walletManager.getOrCreateUserData(pt.sender)?.confirmSpendBase(amountBase)
+                    DefiWallet.instance.walletManager.getOrCreateUserData(pt.recipient)?.creditBase(amountBase)
+
+                    pt.recipient.sendMessage("<green><b>(!)</b> You received ${pt.amount}$ from ${pt.sender.playerName()}!")
+                    pt.sender.sendMessage("<green><b>(!)</b> You sent ${pt.amount}$ to ${pt.recipient.playerName()}!")
+
+                    DefiWallet.instance.logger.info(
+                        "Finalized transaction ${pt.transactionId} (sender=${pt.sender}, recipient=${pt.recipient}, amount=${pt.amount})"
+                    )
                 }
 
                 StatusEnum.EXECUTION_REVERTED, StatusEnum.FAILED, StatusEnum.PROVIDER_ERROR, StatusEnum.REPLACED -> {
@@ -77,6 +94,14 @@ class TransactionManager {
                     iterator.remove()
                     DefiWallet.instance.logger.severe("An error occurred during validation of transaction ${pendingTransaction.transactionId} (status=$newStatus, sender=${pendingTransaction.sender}, recipient=${pendingTransaction.recipient}, amount=${pendingTransaction.amount})")
                     continue
+                    val amountBase = DefiWallet.instance.walletManager.tokensToBaseUnits(pt.amount)
+
+                    DefiWallet.instance.walletManager.getOrCreateUserData(pt.sender)?.restoreMoneyBase(amountBase)
+                    DefiWallet.instance.walletManager.sendError(pt.sender)
+
+                    DefiWallet.instance.logger.severe(
+                        "An error occurred during validation of transaction ${pt.transactionId} (status=$newStatus, sender=${pt.sender}, recipient=${pt.recipient}, amount=${pt.amount})"
+                    )
                 }
                 // Possibility to add status updates to keep user informed of the progress
                 else -> {}
