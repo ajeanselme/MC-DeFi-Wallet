@@ -85,6 +85,6 @@ All operations are ran through Privy API to delegate security and reliability.
   <tr>
     <td>user_email_domain</td>
     <td>Every player will be associated to a Privy user. Privy requires a login method so we use an impossible email address by default. This could potentially be used to allow your players to access their wallet outside of Minecraft.</td>
-    <td><mc_uuid>@none.local</td>
+    <td>mc_uuid@none.local</td>
   </tr>
 </table>
